@@ -1,33 +1,38 @@
-FROM golang:1.24-bookworm
+FROM golang:1.25-bookworm
 
-RUN apt-get update && apt-get install -y \
-    protobuf-compiler \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && \
+    apt-get install -y clang protobuf-compiler git && \
+    rm -rf /var/lib/apt/lists/*
 
-WORKDIR /go/src
+WORKDIR /go/src/go_fuzz_workshop
 
-RUN wget https://github.com/tidwall/gjson/archive/refs/tags/v1.18.0.tar.gz
-RUN tar xf v1.18.0.tar.gz && rm v1.18.0.tar.gz
-
-
-WORKDIR /go/src/gjson-1.18.0
-
-COPY artifacts artifacts
-
-RUN mv artifacts/fuzz_parse_test.go .
-RUN sed -i '/github.com\/yandex-cloud\/go-protobuf-mutator/d' go.mod
-
-RUN go get \
-    github.com/yandex-cloud/go-protobuf-mutator@latest \
-    google.golang.org/protobuf@latest
-
-RUN go mod tidy
+COPY . .
 
 RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 
+RUN git clone https://github.com/Fobos-NT/go-118-fuzz-build.git /tmp/go-118-fuzz-build && \
+    cd /tmp/go-118-fuzz-build && \
+    git checkout 25f75035e16d5ff06a56b9ee86ca3171f2332e8e && \
+    go build -o /usr/local/bin/go-118-fuzz-build .
 
-RUN mkdir -p artifacts/testdata/fuzz/FuzzParseJSON
+RUN protoc \
+    --go_out=. \
+    --go_opt=paths=source_relative \
+    artifacts/json.proto
 
+RUN go get github.com/tidwall/gjson@v1.18.0
+RUN go get github.com/yandex-cloud/go-protobuf-mutator@v1.1.0
+
+RUN go-118-fuzz-build \
+    -proto \
+    -proto_format binary \
+    -func FuzzParseJSON \
+    -o gjson_fuzz.a \
+    go_fuzz_workshop
+
+RUN clang++ \
+    -fsanitize=fuzzer,address \
+    -o gjson_fuzz \
+    gjson_fuzz.a
 
 CMD ["/usr/bin/bash"]

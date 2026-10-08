@@ -17,20 +17,18 @@ docker build --tag=gjson_workshop_img .
 ## 2. Запуск контейнера
 
 ```bash
-docker run -it -v "$(pwd)/artifacts:/home/fuzz/artifacts:ro" --name=gjson_fuzz gjson_workshop_img
+docker run -it --name gjson-fuzz gjson_workshop_img
 ```
 
 - `-it` запускает контейнер с терминалом
-- `--name` задаёт имя контейнера
-- `-v` подключает локальный каталог `artifacts` к `/home/fuzz/artifacts` внутри контейнера
-- `:ro` монтирует каталог только для чтения
+
 
 ## 3. Подготовка fuzz-target
 
 ```bash
-
+cd artifacts/fuzz
 mkdir -p testdata/fuzz/FuzzParseJSONUsual
-cp artifacts/corpus/* testdata/fuzz/FuzzParseJSONUsual/
+cp corpus/* testdata/fuzz/FuzzParseJSONUsual/
 ```
 `testdata/fuzz/FuzzParseJSON` — каталог seed корпуса. Фаззер берёт из него стартовые тесткейсы для `FuzzParseJSONUsual`
 
@@ -74,7 +72,7 @@ go test -fuzz=FuzzParseJSONUsual
 
 ```bash
 cp $(go env GOCACHE)/fuzz/$(go list)/FuzzParseJSONUsual/* testdata/fuzz/FuzzParseJSONUsual
-go test -coverprofile=coverage.out -run=FuzzParseJSONUsual -v
+go test -coverprofile=coverage.out -coverpkg=github.com/tidwall/gjson -run=FuzzParseJSONUsual
 go tool cover -html=coverage.out -o ./coverage.html
 ```
 
@@ -87,7 +85,7 @@ go tool cover -html=coverage.out -o ./coverage.html
 На хосте:
 
 ```bash
-docker cp gjson_fuzz:/go/src/gjson-1.18.0/coverage.html .
+docker cp gjson-fuzz:/go/src/go_fuzz_workshop/artifacts/fuzz/coverage.html .
 ```
 
 Отчет появится в текущкй папке
@@ -98,32 +96,15 @@ Structured-aware fuzzing с Protobuf mutator — это способ фаззи�
 
 ## 8. Запуск structed-aware фаззинга
 
-Генерация protobuf-кода:
-
-```bash
-protoc --go_out=. --go_opt=paths=source_relative artifacts/json.proto
-```
 
 Теперь наша фаззинг функция будет выглядеть так:
 
 ```go
-f.Fuzz(func(t *testing.T, data []byte) {
-		var message JSON
-
-		if err := proto.Unmarshal(data, &message); err != nil {
-			return
-		}
-
-		m := mutator.New(1, 4096)
-
-		if err := m.MutateProto(&message); err != nil {
-			return
-		}
-
-		json := serializeJSON(&message)
-
-		gjson.Parse(json)
+func FuzzParseJSON(f *testing.F) {
+	f.Fuzz(func(t *testing.T, message *artifacts.JSON) {
+		gjson.Parse(serializeJSON(message))
 	})
+}
 ```
 1) получили случайные байты
 2) попробовали десериализовать их из бинарного protobuf-формата в proto-структуру — логическое представление JSON-структуры, если не получилось — остановились
@@ -134,16 +115,38 @@ f.Fuzz(func(t *testing.T, data []byte) {
 Запуск:
 
 ```bash
-go test -fuzz=FuzzParseJSON -fuzztime=5m ./artifacts
+cd ../../
+mkdir -p out coverage
+OUT="$PWD/out" \
+go-118-fuzz-build \
+  -sanitizer coverage \
+  -proto \
+  -proto_format binary \
+  -coverpkg 'go_fuzz_workshop/...,github.com/tidwall/gjson' \
+  -o FuzzParseJSON.cover \
+  -func FuzzParseJSON \
+  .
+
+  ./gjson_fuzz artifacts
 ```
 
 Сбор покрытия:
 ```bash
-cp /root/.cache/go-build/fuzz/github.com/tidwall/gjson/artifacts/FuzzParseJSON/* artifacts/testdata/fuzz/FuzzParseJSON/
-go test -coverprofile=coverage.out -run=FuzzParseJSON -v ./artifacts
-go tool cover -html=coverage.out -o ./coverage.html
+FUZZ_CORPUS_DIR="$PWD/artifacts" \
+./out/FuzzParseJSON.cover \
+-test.run=TestFuzzCorpus \
+-test.gocoverdir="$PWD/coverage"
+
+go tool covdata textfmt \
+  -i="$PWD/coverage" \
+  -o="$PWD/coverage.out"
+
+
+go tool cover \
+	-html="$PWD/coverage.out" \
+	-o="$PWD/coverage.html"
 ```
 На хосте:
 ```bash
-docker cp gjson_fuzz:/go/src/gjson-1.18.0/coverage.html .
+docker cp gjson-fuzz:/go/src/go_fuzz_workshop/artifacts/fuzz/coverage.html .
 ```
