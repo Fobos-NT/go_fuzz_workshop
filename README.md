@@ -26,9 +26,9 @@ docker run -it --name gjson-fuzz gjson_workshop_img
 ## 3. Подготовка fuzz-target
 
 ```bash
-cd artifacts/fuzz
-mkdir -p testdata/fuzz/FuzzParseJSONUsual
-cp corpus/* testdata/fuzz/FuzzParseJSONUsual/
+cd /go/src/go_fuzz_workshop/artifacts/fuzz
+mkdir -p /go/src/go_fuzz_workshop/artifacts/fuzz/testdata/fuzz/FuzzParseJSONUsual
+cp /go/src/go_fuzz_workshop/artifacts/fuzz/corpus/* /go/src/go_fuzz_workshop/artifacts/fuzz/testdata/fuzz/FuzzParseJSONUsual/
 ```
 `testdata/fuzz/FuzzParseJSON` — каталог seed корпуса. Фаззер берёт из него стартовые тесткейсы для `FuzzParseJSONUsual`
 
@@ -94,8 +94,30 @@ docker cp gjson-fuzz:/go/src/go_fuzz_workshop/artifacts/fuzz/coverage.html .
 
 Structured-aware fuzzing с Protobuf mutator — это способ фаззить код не случайными данными, а данными, которые представляют собой четкую структуру, что важно в нашем случае с фаззингом парсера JSON. Мутатор генерит валидные/полувалидные данные, которые начнут парситься, а не сразу отбросятся парсером, что позволяет покрыть большее количество кода и краевых случаев.
 
-## 8. Запуск structed-aware фаззинга
+Перед началом его использования требуется описать структуру тестовых данных - это делается в proto-файле (artifacts\json.proto). 
+Proto-файл — это текстовый файл в формате Protocol Buffers (Protobuf). Он используется для описания структуры данных и API.
 
+Главные особенности:
+
+• Языковая независимость: Описание пишется один раз, а специальный компилятор (protoc) автоматически генерирует из него готовый программный код (структуры, классы, методы сериализации) для разных языков программирования (C#, Java, Python, Go и др.)
+
+• Бинарная сериализация: Данные упаковываются в компактный бинарный формат, который передается по сети намного быстрее и весит меньше
+
+• Контракт для gRPC: Часто используется в связке с фреймворком gRPC, где в .proto файле прописываются не только форматы сообщений, но и методы удаленного вызова процедур.
+
+• Обратная совместимость: Позволяет безопасно добавлять новые поля в структуру данных, не ломая старые версии приложений.
+
+Сгенерируем код с помощью компилятора protoc:
+```bash
+cd /go/src/go_fuzz_workshop
+
+protoc \
+    --go_out=. \
+    --go_opt=paths=source_relative \
+    artifacts/json.proto
+```
+В сгенерированном файле появятся готовые структуры (классы/объекты) для сериализации/десериализации данных.
+## 8. Запуск structed-aware фаззинга
 
 Теперь наша фаззинг функция будет выглядеть так:
 
@@ -112,11 +134,68 @@ func FuzzParseJSON(f *testing.F) {
 4) сериализовали её обратно в JSON
 5) попробовали распарсить получившийся JSON
 
-Запуск:
+Наш кастомный десериализатор из бинарного protobuf-формата находится в файле фаззинг обертки в корне проекта (fuzz_test.go)
+Стоит обратить внимание на то, что аргумент, передаваемый целевой функции теперь не стандартный тип, а именно protobuf-сообщение, обычными средствами (go test) запустить такую обертку не получится
+
+Мы будем использовать [форк go-118-fuzz-build](https://github.com/Fobos-NT/go-118-fuzz-build) 
+
+go-118-fuzz-build — это специальный инструмент для Go, который позволяет компилировать стандартные фаззинг-тесты Go (появившиеся в версии 1.18+) в формат движка libFuzzer
+
+Сборка:
 
 ```bash
-cd ../../
+cd /go/src/go_fuzz_workshop
+
+go-118-fuzz-build \
+    -proto \
+    -proto_format binary \
+    -func FuzzParseJSON \
+    -o gjson_fuzz.a \
+    go_fuzz_workshop
+
+clang++ \
+    -fsanitize=fuzzer,address \
+    -o gjson_fuzz \
+    gjson_fuzz.a
+
+./gjson_fuzz artifacts
+```
+
+Первая команда
+
+Она берёт Go-проект/пакет go_fuzz_workshop и строит из него статическую библиотеку
+
+1) func FuzzParseJSON — указывает fuzzing-функцию, которую нужно использовать
+2) gjson_fuzz.a — имя выходного файл
+3) proto — используется protobuf
+4) proto_format binary — бинарный формат
+5) go_fuzz_workshop — исходный Go-пакет, который компилируется
+
+
+
+Вторая команда
+
+Используется Clang, чтобы собрать из библиотеки исполняемый файл
+
+-fsanitize=fuzzer,address
+
+Это включает два санитайзера:
+
+fuzzer - подключает LLVM libFuzzer — движок, который будет генерировать входные данные и подавать их на вход
+address - подключает AddressSanitizer (ASan). Он обнаруживает ошибки памяти
+
+Третья команда
+
+Запускает фаззинг с сохранением корпуса в папку artifacts
+
+
+Сборка с поддержкой покрытия
+
+```bash
+cd  /go/src/go_fuzz_workshop
+
 mkdir -p out coverage
+
 OUT="$PWD/out" \
 go-118-fuzz-build \
   -sanitizer coverage \
@@ -131,6 +210,8 @@ go-118-fuzz-build \
 ```
 
 Сбор покрытия:
+
+
 ```bash
 FUZZ_CORPUS_DIR="$PWD/artifacts" \
 ./out/FuzzParseJSON.cover \
@@ -141,7 +222,6 @@ go tool covdata textfmt \
   -i="$PWD/coverage" \
   -o="$PWD/coverage.out"
 
-
 go tool cover \
 	-html="$PWD/coverage.out" \
 	-o="$PWD/coverage.html"
@@ -150,3 +230,4 @@ go tool cover \
 ```bash
 docker cp gjson-fuzz:/go/src/go_fuzz_workshop/artifacts/fuzz/coverage.html .
 ```
+Пересборка требуется так как поддержка сбора покрытия - это дополнительная инструментация кода, которой "из коробки" нет. Пересборка с указанием флага `-sanitizer coverage` позволяет включить сбор покрытия и получить статистику по выполнению целевого кода.

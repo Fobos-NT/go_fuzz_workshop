@@ -23,16 +23,16 @@ RUN protoc \
 RUN go get github.com/tidwall/gjson@v1.18.0
 RUN go get github.com/yandex-cloud/go-protobuf-mutator@v1.1.0
 
-RUN go-118-fuzz-build \
-    -proto \
-    -proto_format binary \
-    -func FuzzParseJSON \
-    -o gjson_fuzz.a \
-    go_fuzz_workshop
+# RUN go-118-fuzz-build \
+#     -proto \
+#     -proto_format binary \
+#     -func FuzzParseJSON \
+#     -o gjson_fuzz.a \
+#     go_fuzz_workshop
 
-RUN clang++ \
-    -fsanitize=fuzzer,address \
-    -o gjson_fuzz \
-    gjson_fuzz.a
+# RUN clang++ \
+#     -fsanitize=fuzzer,address \
+#     -o gjson_fuzz \
+#     gjson_fuzz.a
 
 CMD ["/usr/bin/bash"]
